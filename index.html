@@ -82,6 +82,7 @@
             object-fit: cover;
             border: 2px solid rgba(255, 255, 255, 0.3);
             transform: scaleX(-1);
+            background: #2d3748;
         }
 
         #avatarCanvas {
@@ -255,17 +256,28 @@
                 <button id="stopBtn" class="btn btn-secondary" disabled>Stop Camera</button>
             </div>
             <div id="videoStatus" class="status">Click "Start Camera" to begin</div>
-            <div class="troubleshooting" style="margin-top: 15px; padding: 15px; background: rgba(255, 255, 255, 0.1); border-radius: 10px; font-size: 0.9em; line-height: 1.4;">
-                <strong>📱 Android Camera Access:</strong><br>
-                • Make sure you're using <strong>Chrome</strong> or <strong>Firefox</strong><br>
-                • Allow camera permission when prompted<br>
-                • Check if other apps are using camera<br>
+            <div class="troubleshooting" style="margin-top: 15px; padding: 15px; background: rgba(255, 255, 255, 0.1); border-radius: 10px; font-size: 0.9em; line-height: 1.4; display: none;">
+                <strong>🔧 Universal Camera Troubleshooting:</strong><br>
+                <strong>All Devices:</strong><br>
+                • Use HTTPS (not HTTP) - camera requires secure connection<br>
+                • Allow camera permission when browser asks<br>
+                • Close other apps/tabs using camera<br>
                 • Try refreshing the page<br>
-                • Ensure browser has camera permissions in Android settings<br>
-                • Use HTTPS link: <code>https://</code> (not <code>http://</code>)<br>
-                • Close other camera apps before trying<br>
                 <br>
-                <strong>🔧 Quick Fix:</strong> Copy this URL and open in Chrome mobile
+                <strong>📱 Mobile (Android/iOS):</strong><br>
+                • Use Chrome, Firefox, or Safari<br>
+                • Check app permissions in device settings<br>
+                • Clear browser cache and try again<br>
+                <br>
+                <strong>💻 Desktop (Windows/Mac):</strong><br>
+                • Check browser camera settings<br>
+                • Look for camera icon in address bar<br>
+                • System camera permissions may be blocked<br>
+                <br>
+                <strong>🌐 Browser-Specific:</strong><br>
+                • Chrome: chrome://settings/content/camera<br>
+                • Firefox: about:preferences#privacy<br>
+                • Safari: Safari → Preferences → Websites → Camera
             </div>
         </div>
 
@@ -302,10 +314,31 @@
                 this.net = null;
                 this.isDetecting = false;
                 this.animationId = null;
+                this.stream = null;
                 
                 this.setupCanvas();
                 this.setupEventListeners();
                 this.setupAvatar();
+                this.checkBrowserSupport();
+            }
+
+            checkBrowserSupport() {
+                const isSupported = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+                const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
+                
+                if (!isSupported) {
+                    this.updateStatus('videoStatus', 'Camera API not supported in this browser', 'error');
+                    document.getElementById('startBtn').disabled = true;
+                    return;
+                }
+                
+                if (!isSecure) {
+                    this.updateStatus('videoStatus', 'Camera requires HTTPS or localhost', 'error');
+                    document.getElementById('startBtn').disabled = true;
+                    return;
+                }
+                
+                this.updateStatus('videoStatus', 'Ready to start camera');
             }
 
             setupCanvas() {
@@ -344,110 +377,205 @@
                 try {
                     this.updateStatus('videoStatus', 'Requesting camera access...', 'loading');
                     
-                    // Check if getUserMedia is supported
-                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        throw new Error('Camera API not supported in this browser');
-                    }
-                    
-                    // Mobile-optimized camera constraints
+                    // Universal camera constraints that work across all platforms
                     const constraints = {
                         video: {
-                            width: { ideal: 640, max: 1280 },
-                            height: { ideal: 480, max: 720 },
-                            facingMode: 'user', // Front camera
-                            frameRate: { ideal: 30, max: 30 }
+                            facingMode: 'user',
+                            width: { min: 320, ideal: 640, max: 1920 },
+                            height: { min: 240, ideal: 480, max: 1080 }
                         },
                         audio: false
                     };
                     
-                    // For mobile devices, try different approaches
-                    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                    console.log('Requesting camera access...');
                     
-                    if (isMobile) {
-                        // Add mobile-specific constraints
-                        constraints.video.aspectRatio = 4/3;
-                        constraints.video.resizeMode = 'crop-and-scale';
-                    }
+                    // Direct getUserMedia call - this should trigger permission popup
+                    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
                     
-                    console.log('Requesting camera with constraints:', constraints);
+                    console.log('Camera access granted, stream:', this.stream);
                     
-                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    // Set up video element
+                    this.video.srcObject = this.stream;
+                    this.video.autoplay = true;
+                    this.video.playsInline = true; // Important for iOS
+                    this.video.muted = true;
                     
-                    this.video.srcObject = stream;
+                    // Wait for video to be ready
+                    await this.waitForVideoReady();
                     
-                    // Handle mobile video loading
-                    this.video.onloadedmetadata = () => {
-                        console.log('Video metadata loaded');
-                        this.video.play().then(() => {
-                            console.log('Video playing successfully');
-                            this.updateStatus('videoStatus', 'Camera active', 'active');
-                            document.getElementById('startBtn').disabled = true;
-                            document.getElementById('stopBtn').disabled = false;
-                            document.getElementById('togglePoseBtn').disabled = false;
-                            this.updateStatus('poseStatus', 'Ready for pose detection');
-                        }).catch(playError => {
-                            console.error('Error playing video:', playError);
-                            this.updateStatus('videoStatus', 'Error playing video', 'error');
-                        });
-                    };
-                    
-                    // Handle mobile video loading errors
-                    this.video.onerror = (error) => {
-                        console.error('Video element error:', error);
-                        this.updateStatus('videoStatus', 'Video loading error', 'error');
-                    };
+                    this.updateStatus('videoStatus', 'Camera active', 'active');
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    document.getElementById('togglePoseBtn').disabled = false;
+                    this.updateStatus('poseStatus', 'Ready for pose detection');
                     
                 } catch (error) {
-                    console.error('Error accessing camera:', error);
-                    let errorMessage = 'Camera access failed';
-                    
-                    if (error.name === 'NotAllowedError') {
-                        errorMessage = 'Camera permission denied. Please tap "Allow" when prompted.';
-                    } else if (error.name === 'NotFoundError') {
-                        errorMessage = 'No camera found. Please check your device camera.';
-                    } else if (error.name === 'NotReadableError') {
-                        errorMessage = 'Camera is being used by another app. Please close other camera apps.';
-                    } else if (error.name === 'NotSupportedError') {
-                        errorMessage = 'Camera not supported in this browser. Try Chrome or Firefox.';
-                    } else if (error.name === 'OverconstrainedError') {
-                        errorMessage = 'Camera constraints not supported. Trying fallback...';
-                        // Try with simpler constraints
-                        this.tryFallbackCamera();
-                        return;
-                    } else if (error.message.includes('secure') || error.message.includes('https')) {
-                        errorMessage = 'Camera requires HTTPS. Please use a secure connection.';
-                    }
-                    
-                    this.updateStatus('videoStatus', errorMessage, 'error');
+                    console.error('Camera access error:', error);
+                    this.handleCameraError(error);
                 }
             }
 
-            async tryFallbackCamera() {
+            waitForVideoReady() {
+                return new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Video loading timeout'));
+                    }, 10000);
+                    
+                    const onCanPlay = () => {
+                        clearTimeout(timeout);
+                        this.video.removeEventListener('canplay', onCanPlay);
+                        this.video.removeEventListener('error', onError);
+                        
+                        // Force play for mobile browsers
+                        this.video.play().then(() => {
+                            console.log('Video playing successfully');
+                            resolve();
+                        }).catch(playError => {
+                            console.error('Play error:', playError);
+                            // Try without play() - some browsers auto-play
+                            resolve();
+                        });
+                    };
+                    
+                    const onError = (error) => {
+                        clearTimeout(timeout);
+                        this.video.removeEventListener('canplay', onCanPlay);
+                        this.video.removeEventListener('error', onError);
+                        reject(error);
+                    };
+                    
+                    this.video.addEventListener('canplay', onCanPlay);
+                    this.video.addEventListener('error', onError);
+                    
+                    // If video is already ready
+                    if (this.video.readyState >= 2) {
+                        onCanPlay();
+                    }
+                });
+            }
+
+            handleCameraError(error) {
+                let errorMessage = 'Camera access failed';
+                let suggestions = [];
+                
+                switch (error.name) {
+                    case 'NotAllowedError':
+                        errorMessage = 'Camera permission denied';
+                        suggestions = [
+                            'Click "Allow" when browser asks for camera permission',
+                            'Check browser address bar for camera icon and allow',
+                            'Clear browser permissions and try again',
+                            'Make sure no other app is using the camera'
+                        ];
+                        break;
+                        
+                    case 'NotFoundError':
+                        errorMessage = 'No camera found';
+                        suggestions = [
+                            'Make sure your device has a camera',
+                            'Check if camera is properly connected',
+                            'Try refreshing the page',
+                            'Check device camera permissions'
+                        ];
+                        break;
+                        
+                    case 'NotReadableError':
+                        errorMessage = 'Camera is busy';
+                        suggestions = [
+                            'Close other apps using the camera',
+                            'Restart your browser',
+                            'Check if another tab is using camera',
+                            'Try again in a few seconds'
+                        ];
+                        break;
+                        
+                    case 'OverconstrainedError':
+                        errorMessage = 'Camera constraints not supported';
+                        suggestions = [
+                            'Your camera may not support the requested settings',
+                            'Trying with basic settings...'
+                        ];
+                        this.tryBasicCamera();
+                        return;
+                        
+                    case 'NotSupportedError':
+                        errorMessage = 'Camera not supported in this browser';
+                        suggestions = [
+                            'Try Chrome, Firefox, Safari, or Edge',
+                            'Update your browser to latest version',
+                            'Use HTTPS instead of HTTP'
+                        ];
+                        break;
+                        
+                    default:
+                        if (error.message.includes('Permission denied')) {
+                            errorMessage = 'Camera permission denied';
+                            suggestions = [
+                                'Look for camera permission popup',
+                                'Check browser address bar for camera icon',
+                                'Allow camera access when prompted'
+                            ];
+                        } else if (error.message.includes('secure')) {
+                            errorMessage = 'Secure connection required';
+                            suggestions = [
+                                'Use HTTPS instead of HTTP',
+                                'Camera requires secure connection'
+                            ];
+                        }
+                }
+                
+                this.updateStatus('videoStatus', errorMessage, 'error');
+                this.showTroubleshootingSteps(suggestions);
+            }
+
+            async tryBasicCamera() {
                 try {
-                    console.log('Trying fallback camera constraints...');
-                    const stream = await navigator.mediaDevices.getUserMedia({
+                    console.log('Trying basic camera constraints...');
+                    this.updateStatus('videoStatus', 'Trying basic camera settings...', 'loading');
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia({
                         video: true,
                         audio: false
                     });
                     
-                    this.video.srcObject = stream;
-                    this.video.onloadedmetadata = () => {
-                        this.video.play();
-                        this.updateStatus('videoStatus', 'Camera active (fallback mode)', 'active');
-                        document.getElementById('startBtn').disabled = true;
-                        document.getElementById('stopBtn').disabled = false;
-                        document.getElementById('togglePoseBtn').disabled = false;
-                        this.updateStatus('poseStatus', 'Ready for pose detection');
-                    };
-                } catch (fallbackError) {
-                    console.error('Fallback camera failed:', fallbackError);
-                    this.updateStatus('videoStatus', 'All camera options failed', 'error');
+                    this.video.srcObject = this.stream;
+                    this.video.autoplay = true;
+                    this.video.playsInline = true;
+                    this.video.muted = true;
+                    
+                    await this.waitForVideoReady();
+                    
+                    this.updateStatus('videoStatus', 'Camera active (basic mode)', 'active');
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    document.getElementById('togglePoseBtn').disabled = false;
+                    this.updateStatus('poseStatus', 'Ready for pose detection');
+                    
+                } catch (basicError) {
+                    console.error('Basic camera also failed:', basicError);
+                    this.handleCameraError(basicError);
+                }
+            }
+
+            showTroubleshootingSteps(suggestions) {
+                const troubleshootingDiv = document.querySelector('.troubleshooting');
+                if (troubleshootingDiv && suggestions.length > 0) {
+                    const stepsList = suggestions.map(step => `• ${step}`).join('<br>');
+                    troubleshootingDiv.innerHTML = `<strong>💡 Try these steps:</strong><br>${stepsList}`;
+                    troubleshootingDiv.style.display = 'block';
                 }
             }
 
             stopCamera() {
+                if (this.stream) {
+                    this.stream.getTracks().forEach(track => {
+                        track.stop();
+                        console.log('Camera track stopped:', track.kind);
+                    });
+                    this.stream = null;
+                }
+                
                 if (this.video.srcObject) {
-                    this.video.srcObject.getTracks().forEach(track => track.stop());
                     this.video.srcObject = null;
                 }
                 
@@ -526,4 +654,193 @@
                     this.updatePoseInfo(pose);
                     this.drawAvatar();
                     
-                } catch 
+                } catch (error) {
+                    console.error('Pose detection error:', error);
+                }
+                
+                this.animationId = requestAnimationFrame(() => this.detectPose());
+            }
+
+            updatePoseInfo(pose) {
+                const confidence = Math.round(pose.score * 100);
+                const keypointsCount = pose.keypoints.filter(kp => kp.score > 0.5).length;
+                
+                document.getElementById('poseConfidence').textContent = confidence + '%';
+                document.getElementById('confidenceFill').style.width = confidence + '%';
+                document.getElementById('keypointsCount').textContent = keypointsCount;
+                document.getElementById('avatarStatus').textContent = confidence > 30 ? 'Mirroring' : 'Searching';
+            }
+
+            drawAvatar() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw background grid
+                this.drawGrid();
+                
+                if (this.avatar.poses && this.avatar.poses.score > 0.3) {
+                    this.drawPoseAvatar();
+                } else {
+                    this.drawDefaultAvatar();
+                }
+            }
+
+            drawGrid() {
+                this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+                this.ctx.lineWidth = 1;
+                
+                const gridSize = 30;
+                for (let x = 0; x < this.canvas.width; x += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x, 0);
+                    this.ctx.lineTo(x, this.canvas.height);
+                    this.ctx.stroke();
+                }
+                
+                for (let y = 0; y < this.canvas.height; y += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, y);
+                    this.ctx.lineTo(this.canvas.width, y);
+                    this.ctx.stroke();
+                }
+            }
+
+            drawPoseAvatar() {
+                const pose = this.avatar.poses;
+                const keypoints = pose.keypoints;
+                
+                // Scale factors to fit canvas
+                const scaleX = this.canvas.width / 640;
+                const scaleY = this.canvas.height / 480;
+                
+                // Draw skeleton
+                this.ctx.strokeStyle = this.avatar.color;
+                this.ctx.lineWidth = 4;
+                this.ctx.lineCap = 'round';
+                
+                // Define skeleton connections
+                const connections = [
+                    ['leftShoulder', 'rightShoulder'],
+                    ['leftShoulder', 'leftElbow'],
+                    ['leftElbow', 'leftWrist'],
+                    ['rightShoulder', 'rightElbow'],
+                    ['rightElbow', 'rightWrist'],
+                    ['leftShoulder', 'leftHip'],
+                    ['rightShoulder', 'rightHip'],
+                    ['leftHip', 'rightHip'],
+                    ['leftHip', 'leftKnee'],
+                    ['leftKnee', 'leftAnkle'],
+                    ['rightHip', 'rightKnee'],
+                    ['rightKnee', 'rightAnkle'],
+                    ['nose', 'leftEye'],
+                    ['nose', 'rightEye'],
+                    ['leftEye', 'leftEar'],
+                    ['rightEye', 'rightEar']
+                ];
+                
+                // Draw connections
+                connections.forEach(([partA, partB]) => {
+                    const pointA = keypoints.find(kp => kp.part === partA);
+                    const pointB = keypoints.find(kp => kp.part === partB);
+                    
+                    if (pointA && pointB && pointA.score > 0.5 && pointB.score > 0.5) {
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(pointA.position.x * scaleX, pointA.position.y * scaleY);
+                        this.ctx.lineTo(pointB.position.x * scaleX, pointB.position.y * scaleY);
+                        this.ctx.stroke();
+                    }
+                });
+                
+                // Draw keypoints
+                this.ctx.fillStyle = '#FF6B6B';
+                keypoints.forEach(keypoint => {
+                    if (keypoint.score > 0.5) {
+                        this.ctx.beginPath();
+                        this.ctx.arc(
+                            keypoint.position.x * scaleX,
+                            keypoint.position.y * scaleY,
+                            6,
+                            0,
+                            Math.PI * 2
+                        );
+                        this.ctx.fill();
+                    }
+                });
+                
+                // Draw head
+                const nose = keypoints.find(kp => kp.part === 'nose');
+                if (nose && nose.score > 0.5) {
+                    this.ctx.fillStyle = 'rgba(78, 205, 196, 0.3)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(
+                        nose.position.x * scaleX,
+                        nose.position.y * scaleY,
+                        25,
+                        0,
+                        Math.PI * 2
+                    );
+                    this.ctx.fill();
+                }
+            }
+
+            drawDefaultAvatar() {
+                const centerX = this.canvas.width / 2;
+                const centerY = this.canvas.height / 2;
+                
+                // Draw default stick figure
+                this.ctx.strokeStyle = this.avatar.color;
+                this.ctx.lineWidth = 4;
+                this.ctx.lineCap = 'round';
+                
+                // Head
+                this.ctx.beginPath();
+                this.ctx.arc(centerX, centerY - 60, 25, 0, Math.PI * 2);
+                this.ctx.stroke();
+                
+                // Body
+                this.ctx.beginPath();
+                this.ctx.moveTo(centerX, centerY - 35);
+                this.ctx.lineTo(centerX, centerY + 40);
+                this.ctx.stroke();
+                
+                // Arms
+                this.ctx.beginPath();
+                this.ctx.moveTo(centerX - 40, centerY - 10);
+                this.ctx.lineTo(centerX + 40, centerY - 10);
+                this.ctx.stroke();
+                
+                // Legs
+                this.ctx.beginPath();
+                this.ctx.moveTo(centerX, centerY + 40);
+                this.ctx.lineTo(centerX - 30, centerY + 80);
+                this.ctx.moveTo(centerX, centerY + 40);
+                this.ctx.lineTo(centerX + 30, centerY + 80);
+                this.ctx.stroke();
+                
+                // Add pulsing effect
+                const time = Date.now() * 0.003;
+                const pulse = Math.sin(time) * 0.1 + 1;
+                this.ctx.globalAlpha = pulse;
+                
+                // Draw glow effect
+                this.ctx.shadowColor = this.avatar.color;
+                this.ctx.shadowBlur = 20;
+                this.ctx.stroke();
+                
+                this.ctx.globalAlpha = 1;
+                this.ctx.shadowBlur = 0;
+            }
+
+            updateStatus(elementId, message, type = '') {
+                const element = document.getElementById(elementId);
+                element.textContent = message;
+                element.className = `status ${type}`;
+            }
+        }
+
+        // Initialize the application
+        window.addEventListener('load', () => {
+            new AvatarMirror();
+        });
+    </script>
+</body>
+</html>
