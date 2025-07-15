@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Avatar Mirror</title>
+    <title>AI Avatar Mirror - Live Version</title>
     <style>
         * {
             margin: 0;
@@ -310,9 +310,10 @@
         </div>
     </div>
 
-    <!-- Load TensorFlow.js and PoseNet -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/3.18.0/tf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/3.18.0/tf-backend-webgl.min.js"></script>
+    <!-- TensorFlow.js and MediaPipe Pose Detection Model -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
 
     <script>
         class AvatarMirror {
@@ -320,11 +321,10 @@
                 this.video = document.getElementById('videoElement');
                 this.canvas = document.getElementById('avatarCanvas');
                 this.ctx = this.canvas.getContext('2d');
-                this.net = null;
+                this.detector = null;
                 this.isDetecting = false;
                 this.animationId = null;
                 this.stream = null;
-                this.poseHistory = [];
                 
                 this.setupCanvas();
                 this.setupEventListeners();
@@ -334,7 +334,7 @@
 
             checkBrowserSupport() {
                 const isSupported = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
-                const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
+                const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
                 
                 if (!isSupported) {
                     this.updateStatus('videoStatus', 'Camera API not supported', 'error');
@@ -371,7 +371,6 @@
             setupAvatar() {
                 this.avatar = {
                     poses: null,
-                    smoothing: 0.7,
                     baseColor: '#4ECDC4',
                     jointColor: '#FF6B6B',
                     glowColor: '#54A0FF'
@@ -382,7 +381,6 @@
             async startCamera() {
                 try {
                     this.updateStatus('videoStatus', 'Starting camera...', 'loading');
-                    
                     const constraints = {
                         video: {
                             facingMode: 'user',
@@ -394,12 +392,11 @@
                     
                     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
                     this.video.srcObject = this.stream;
-                    this.video.autoplay = true;
-                    this.video.playsInline = true;
-                    this.video.muted = true;
                     
-                    await this.waitForVideo();
-                    
+                    await new Promise((resolve) => {
+                        this.video.onloadedmetadata = () => resolve();
+                    });
+
                     this.updateStatus('videoStatus', 'Camera active', 'active');
                     document.getElementById('startBtn').disabled = true;
                     document.getElementById('stopBtn').disabled = false;
@@ -408,23 +405,8 @@
                     
                 } catch (error) {
                     console.error('Camera error:', error);
-                    this.updateStatus('videoStatus', 'Camera access failed', 'error');
+                    this.updateStatus('videoStatus', `Camera error: ${error.message}`, 'error');
                 }
-            }
-
-            waitForVideo() {
-                return new Promise((resolve, reject) => {
-                    const timeout = setTimeout(() => reject(new Error('Video timeout')), 10000);
-                    
-                    const onReady = () => {
-                        clearTimeout(timeout);
-                        this.video.removeEventListener('canplay', onReady);
-                        resolve();
-                    };
-                    
-                    this.video.addEventListener('canplay', onReady);
-                    if (this.video.readyState >= 2) onReady();
-                });
             }
 
             stopCamera() {
@@ -445,6 +427,8 @@
                 
                 this.updateStatus('videoStatus', 'Camera stopped');
                 this.updateStatus('poseStatus', 'Camera needed');
+                this.avatar.poses = null;
+                this.drawAvatar();
             }
 
             async togglePoseDetection() {
@@ -458,8 +442,6 @@
             async startPoseDetection() {
                 try {
                     this.updateStatus('poseStatus', 'Loading AI model...', 'loading');
-                    
-                    // Load MediaPipe Pose or simplified pose detection
                     await this.loadPoseModel();
                     
                     this.isDetecting = true;
@@ -478,13 +460,11 @@
             }
 
             async loadPoseModel() {
-                // Simplified pose detection using basic computer vision
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        this.net = { loaded: true };
-                        resolve();
-                    }, 1000);
-                });
+                if (this.detector) return;
+                const detectorConfig = {
+                    modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+                };
+                this.detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, detectorConfig);
             }
 
             stopPoseDetection() {
@@ -493,31 +473,26 @@
                     cancelAnimationFrame(this.animationId);
                 }
                 
-                document.getElementById('togglePoseBtn').textContent = 'Start Detection';
-                document.getElementById('togglePoseBtn').className = 'btn btn-success';
+                if (document.getElementById('togglePoseBtn')) {
+                    document.getElementById('togglePoseBtn').textContent = 'Start Detection';
+                    document.getElementById('togglePoseBtn').className = 'btn btn-success';
+                }
                 
                 this.updateStatus('poseStatus', 'Detection stopped');
-                document.getElementById('poseInfo').style.display = 'none';
+                if(document.getElementById('poseInfo')) document.getElementById('poseInfo').style.display = 'none';
                 
                 this.avatar.poses = null;
                 this.drawAvatar();
             }
 
             async detectPose() {
-                if (!this.isDetecting) return;
+                if (!this.isDetecting || !this.detector) return;
                 
                 try {
-                    // Simulate pose detection with mock data
-                    const pose = this.generateMockPose();
-                    
-                    // Smooth the pose data
-                    if (this.avatar.poses) {
-                        this.avatar.poses = this.smoothPose(this.avatar.poses, pose);
-                    } else {
-                        this.avatar.poses = pose;
-                    }
-                    
-                    this.updatePoseInfo(pose);
+                    const poses = await this.detector.estimatePoses(this.video, {flipHorizontal: false});
+                    this.avatar.poses = poses.length > 0 ? poses[0] : null;
+
+                    this.updatePoseInfo(this.avatar.poses);
                     this.drawAvatar();
                     
                 } catch (error) {
@@ -527,25 +502,63 @@
                 this.animationId = requestAnimationFrame(() => this.detectPose());
             }
 
-            generateMockPose() {
-                const time = Date.now() * 0.001;
-                const centerX = this.canvas.width / 2;
-                const centerY = this.canvas.height / 2;
+            updatePoseInfo(pose) {
+                if (!pose) {
+                    document.getElementById('avatarStatus').textContent = 'No person detected';
+                    return;
+                }
+                const confidence = Math.round((pose.score || 0) * 100);
+                const keypointsCount = pose.keypoints.filter(kp => (kp.score || 0) > 0.5).length;
                 
-                return {
-                    score: 0.8 + Math.sin(time) * 0.2,
-                    keypoints: [
-                        { part: 'nose', position: { x: centerX, y: centerY - 60 + Math.sin(time) * 5 }, score: 0.9 },
-                        { part: 'leftEye', position: { x: centerX - 15, y: centerY - 65 }, score: 0.8 },
-                        { part: 'rightEye', position: { x: centerX + 15, y: centerY - 65 }, score: 0.8 },
-                        { part: 'leftShoulder', position: { x: centerX - 40, y: centerY - 20 + Math.sin(time * 0.5) * 10 }, score: 0.9 },
-                        { part: 'rightShoulder', position: { x: centerX + 40, y: centerY - 20 + Math.sin(time * 0.5 + Math.PI) * 10 }, score: 0.9 },
-                        { part: 'leftElbow', position: { x: centerX - 60, y: centerY + 20 + Math.sin(time * 0.7) * 15 }, score: 0.8 },
-                        { part: 'rightElbow', position: { x: centerX + 60, y: centerY + 20 + Math.sin(time * 0.7 + Math.PI) * 15 }, score: 0.8 },
-                        { part: 'leftWrist', position: { x: centerX - 80, y: centerY + 60 + Math.sin(time * 0.9) * 20 }, score: 0.7 },
-                        { part: 'rightWrist', position: { x: centerX + 80, y: centerY + 60 + Math.sin(time * 0.9 + Math.PI) * 20 }, score: 0.7 },
-                        { part: 'leftHip', position: { x: centerX - 25, y: centerY + 80 }, score: 0.9 },
-                        { part: 'rightHip', position: { x: centerX + 25, y: centerY + 80 }, score: 0.9 },
-                        { part: 'leftKnee', position: { x: centerX - 30, y: centerY + 140 + Math.sin(time * 1.2) * 10 }, score: 0.8 },
-                        { part: 'rightKnee', position: { x: centerX + 30, y: centerY + 140 + Math.sin(time * 1.2 + Math.PI) * 10 }, score: 0.8 },
-                        { part: 'leftAnkle', position: { x: cent
+                document.getElementById('poseConfidence').textContent = confidence + '%';
+                document.getElementById('confidenceFill').style.width = confidence + '%';
+                document.getElementById('keypointsCount').textContent = `${keypointsCount}/17`;
+                document.getElementById('avatarStatus').textContent = confidence > 50 ? 'Mirroring' : 'Detecting';
+            }
+
+            drawAvatar() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.drawBackground();
+                
+                if (this.avatar.poses && (this.avatar.poses.score || 0) > 0.3) {
+                    this.drawPoseAvatar();
+                } else {
+                    this.drawDefaultAvatar();
+                }
+            }
+            
+            drawBackground() {
+                this.ctx.fillStyle = '#2d3748';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            drawPoseAvatar() {
+                const pose = this.avatar.poses;
+                if (!pose) return;
+
+                const keypoints = pose.keypoints;
+                
+                this.ctx.shadowColor = this.avatar.glowColor;
+                this.ctx.shadowBlur = 10;
+                this.ctx.strokeStyle = this.avatar.baseColor;
+                this.ctx.lineWidth = 4;
+                this.ctx.lineCap = 'round';
+                
+                const connections = {
+                    'torso': ['left_shoulder', 'right_shoulder', 'right_hip', 'left_hip', 'left_shoulder'],
+                    'left_arm': ['left_shoulder', 'left_elbow', 'left_wrist'],
+                    'right_arm': ['right_shoulder', 'right_elbow', 'right_wrist'],
+                    'left_leg': ['left_hip', 'left_knee', 'left_ankle'],
+                    'right_leg': ['right_hip', 'right_knee', 'right_ankle']
+                };
+
+                const keypointMap = new Map(keypoints.map(kp => [kp.name, kp]));
+
+                const scaleX = this.canvas.width / this.video.videoWidth;
+                const scaleY = this.canvas.height / this.video.videoHeight;
+                
+                // Draw connections
+                Object.values(connections).forEach(parts => {
+                    this.ctx.beginPath();
+                    for(let i = 0; i < parts.length; i++) {
+                        const kp = keypoint
